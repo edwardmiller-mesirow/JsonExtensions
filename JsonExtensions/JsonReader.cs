@@ -1,10 +1,11 @@
 ﻿using System.Buffers;
 using System.Buffers.Text;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 namespace JsonExtensions
 {
@@ -272,15 +273,61 @@ namespace JsonExtensions
             this.Read();
             return this.GetString();
         }
+
         public string? GetString()
         {
             if (this.TokenType != JsonTokenType.PropertyName && this.TokenType != JsonTokenType.String)
                 return null;
 
-            var str = utf8Encoding.GetString(this.Value.ToArray());
+            Span<char> result = stackalloc char[this.Value.Length];
 
-            return Regex.Unescape(str);
+            UnescapeString(this.Value, result);
+
+            return new string(result);
         }
+
+        private static readonly Dictionary<byte, char> escapeLookup = new()
+        {
+            {(byte)'n', '\n'},
+            {(byte)'r', '\r'},
+            {(byte)'t', '\t'},
+            {(byte)'b', '\b'},
+            {(byte)'f', '\f'},
+            {(byte)'\\', '\\'},
+            {(byte)'/', '/'},
+            {(byte)'"', '\"'}
+        };
+
+        private void UnescapeString(ReadOnlyMemory<byte> memory, Span<char> result)
+        {
+            if (result.Length < memory.Length)
+                throw new ArgumentException("Result buffer is too small.", nameof(result));
+
+            var memorySpan = memory.Span;
+            int i = 0;
+            int j = 0;
+            while (i < memorySpan.Length)
+            {
+                byte b = memorySpan[i];
+                char c;
+                if (b == '\\')
+                {
+                    b = memorySpan[++i];
+                    if (!escapeLookup.TryGetValue(b, out c))
+                    {
+                        c = (char)b;
+                    }
+                }
+                else
+                {
+                    c = (char)b;
+                }
+                Unsafe.Add(ref MemoryMarshal.GetReference(result), j) = c;
+                i++;
+                j++;
+            }
+        }
+
         public string? ReadAsEscapedString()
         {
             this.Read();
